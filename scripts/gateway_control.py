@@ -438,13 +438,15 @@ def cmd_session(extra: list[str]) -> int:
         )
     except KeyboardInterrupt:
         code = 130
-    if started_here:
-        pid = read_pid()
-        if pid is not None:
-            print("Chat closed - stopping gateway ...", flush=True)
-            stop_pid(pid, 35.0)
-            cleanup_stale()
-            print("Gateway stopped.", flush=True)
+    # Always stop the gateway when the chat session ends so the user returns
+    # to the launcher menu with no orphaned background console. The guardian
+    # (spawned above when we started the gateway) is the backup stop path.
+    pid = read_pid()
+    if pid is not None:
+        print("Chat closed - stopping gateway ...", flush=True)
+        stop_pid(pid, 35.0)
+        cleanup_stale()
+        print("Gateway stopped.", flush=True)
     return code
 
 
