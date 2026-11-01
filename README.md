@@ -30,6 +30,7 @@
 *    **True Privacy & Isolation**: Your API keys (`data/.env`), conversations (`data/sessions/`), persistent memory, and custom skills are kept strictly within the portable folder.
 *    **Interactive Console Launcher**: Includes a beautiful terminal UI dashboard with state-tracking for setup status, LLM providers, and background gateways.
 *    **Full Hermes Capabilities**: Retains all features of [Nous Research's Hermes Agent](https://github.com/NousResearch/hermes-agent), including memory storage and reusable skill generation.
+*    **Local `.gguf` Model Support**: Load local GGUF models through Hermes' managed llama.cpp runtime (`--local-model <path>`). Installs llama.cpp automatically when missing, stages the model, starts the local server, and shuts it down when the CLI exits — fully offline, no cloud API keys required.
 
 ---
 
@@ -71,6 +72,12 @@ graph TD
     J --> K[Auto-start Gateway in background]
     K --> L[Launch Terminal Dashboard Menu]
     L --> M[Start Gateway + Chat → Stop Gateway]
+    L --> N[Load local .gguf via --local-model]
+    N --> O[Ensure llama.cpp engine installed]
+    O --> P[Sideload .gguf into models dir]
+    P --> Q[Start supervised llama-server]
+    Q --> R[Route CLI at local model]
+    R --> S[Chat locally — no cloud API key]
 ```
 
 ### The Isolation Design
@@ -150,6 +157,72 @@ http://127.0.0.1:11434/v1
 6. Select the detected Ollama model and leave context length blank to auto-detect it.
 
 For a remote Ollama host, use the same `/v1` endpoint format, for example `http://192.168.1.20:11434/v1`. Make sure the Ollama host is reachable from the computer running Hermes Portable.
+
+---
+
+## 🦙 Using local Llama.cpp server and loading local .GGUF models
+
+Hermes Portable can run models entirely offline using local `.gguf` files through its **managed llama.cpp server**. When you pass `--local-model <path>`, Hermes:
+
+1. Validates the `.gguf` file exists
+2. **Installs llama.cpp automatically** (via PM) when no engine is present
+3. Sideloads the model into the managed `data/models/` directory
+4. Starts the supervised `llama-server` on a local loopback port
+5. Routes the current chat at that local model — no cloud API key needed
+6. **Stops the server when the CLI exits** (portable, leaves nothing running)
+
+### Usage
+
+```bash
+# Windows (launch.bat)
+launch.bat --local-model "C:\path\to\model.gguf"
+launch.bat chat --local-model "models/meta-llama-3.1-8b-instruct.Q4_K_M.gguf"
+
+# macOS / Linux (launch.sh)
+./launch.sh --local-model "/path/to/model.gguf"
+./launch.sh chat --local-model "/path/to/model.gguf"
+```
+
+Or with the `hermes` CLI directly:
+
+```bash
+hermes --local-model /path/to/model.gguf -q "Hello, who are you?"
+hermes chat --local-model /path/to/model.gguf
+```
+
+### Recommended local .GGUF models
+
+The table below lists efficient, capable GGUF models suitable for portable/local execution. Pick a quantisation that fits your available RAM/VRAM — lower-bit Q4_K_M or Q5_K_M runs well on CPU-only machines, while Q6_K / Q8_0 needs more memory but better quality.
+
+| Model | Type | Size (Q4) | CPU-only RAM | Recommended VRAM | Best For | Capabilities |
+|-------|------|-----------|--------------|------------------|----------|--------------|
+| **Llama-3.1-8B-Instruct** | General / Efficient | ~4.7 GB | 8 GB | 6 GB | General chat, coding, reasoning | Strong generalist, tool use, multilingual |
+| **Qwen2.5-Coder-7B-Instruct** | Coder | ~4.3 GB | 8 GB | 6 GB | Code generation, debugging | Excellent coding, math, reasoning |
+| **CodeLlama-7B-Instruct** | Coder | ~4.1 GB | 8 GB | 6 GB | Code completion, infill | Python/SQL/Java focus, fill-in-the-middle |
+| **Phi-3.5-mini-instruct** | Efficient / Small | ~2.2 GB | 4 GB | 3 GB | Low-spec machines, fast replies | Good general chat, small footprint |
+| **Gemma-2-9B-IT** | General | ~5.4 GB | 10 GB | 8 GB | Instruction following, reasoning | Strong alignment, safe responses |
+| **Nemotron-H / Nemotron-Mini** | Efficient / Coder | ~4.0–8.0 GB | 8–16 GB | 6–10 GB | Coding, agentic workflows | Tool use, function calling, reasoning |
+| **Abiterated / Uncensored variants** | Uncensored | ~4–9 GB | 8–16 GB | 6–10 GB | Open-ended generation, roleplay | Fewer refusals, creative writing |
+| **NSFW / DAN-compatible variants** | Uncensored | ~4–9 GB | 8–16 GB | 6–10 GB | Adult content, jailbreak-style prompts | Minimal safety filters, unfiltered |
+
+> ⚠️ **Content warning**: Uncensored / abilterated / NSFW / DAN-compatible GGUFs have reduced or no safety filtering. Use them responsibly and only in private, isolated environments. You are solely responsible for the content you generate.
+
+### Quantisation guide
+
+| Quant | Quality | VRAM/RAM | Speed | Use case |
+|-------|---------|----------|-------|----------|
+| **Q2_K / Q3_K_S** | Low | Smallest | Fastest | Very low RAM devices |
+| **Q4_K_M** | Good | Balanced | Fast | **Recommended default** for most |
+| **Q5_K_M** | Better | Medium | Medium | Better reasoning, still efficient |
+| **Q6_K** | Very good | Large | Slower | High-quality on capable hardware |
+| **Q8_0** | Near-fp16 | Largest | Slowest | Maximum quality, high-end GPUs |
+
+### Notes
+
+* The first run downloads and installs llama.cpp (~200–400 MB depending on platform).
+* GGUF models are stored under `data/models/` and shared across all profiles.
+* The local server binds to `127.0.0.1` only — it is never exposed to the internet.
+* When the Hermes CLI exits, the managed llama-server shuts down automatically (portable behavior).
 
 ---
 
