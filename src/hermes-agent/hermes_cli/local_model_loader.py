@@ -3,7 +3,8 @@
 A single public function, :func:`load_local_model`, validates a .gguf on disk,
 ensures the llama.cpp engine is installed (PM download when missing), sideloads
 the model into the managed models directory, starts the supervised llama-server,
-and returns the routing the CLI needs (model id, provider, base_url, api_key).
+verifies the model is loaded and responsive, and returns the routing the CLI
+needs (model id, provider, base_url, api_key).
 
 The caller owns the returned runtime and must call :func:`shutdown_local_model`
 when the CLI process exits so the server is torn down with it.
@@ -11,10 +12,14 @@ when the CLI process exits so the server is torn down with it.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
 import threading
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
@@ -30,6 +35,12 @@ _LOADER_LOCK = threading.Lock()
 _ACTIVE_MODEL_ID: Optional[str] = None
 _ACTIVE_BASE_URL: Optional[str] = None
 _ACTIVE_API_KEY: Optional[str] = None
+
+# Seconds to wait for the staged model to appear in the router's model list
+# after a refresh (the router only scans the models dir at spawn/refresh).
+_MODEL_APPEAR_WAIT_S = 15.0
+# Seconds to allow for a model load + touch generation before giving up.
+_MODEL_READY_WAIT_S = 300.0
 
 
 def _models_dir() -> Path:
@@ -56,6 +67,49 @@ def _sideload(src: Path) -> Path:
     return dest
 
 
+def _server_models(base_url: str, api_key: str, timeout_s: float = 5.0) -> dict:
+    """Return {model_id: status} from the llama-server GET /models endpoint."""
+    headers = {"Authorization": f"Bearer {api_key}"}
+    req = urllib.request.Request(
+        base_url.rsplit("/v1", 1)[0] + "/models", headers=headers
+    )
+    with urllib.request.urlopen(req, timeout=timeout_s) as r:
+        data = json.loads(r.read() or b"{}")
+    return {
+        m.get("id"): m.get("status", {}).get("value", "unknown")
+        for m in data.get("data", [])
+    }
+
+
+def _wait_for_model(sup, model_id: str, wait_s: float) -> bool:
+    """Poll the supervisor's model list until ``model_id`` is present."""
+    deadline = time.monotonic() + wait_s
+    last_status = None
+    while time.monotonic() < deadline:
+        try:
+            statuses = sup.models(timeout_s=5)
+        except Exception:
+            statuses = {}
+        status = statuses.get(model_id)
+        if status is not None:
+            if status != last_status:
+                logger.info("model %s appeared in router (status=%s)", model_id, status)
+                last_status = status
+            if status in ("loaded", "ready", "loading", "sleeping"):
+                return True
+        time.sleep(1)
+    return False
+
+
+def _ensure_model_ready(sup, model_id: str, wait_s: float) -> bool:
+    """Load ``model_id`` if needed and prove readiness with a touch generation."""
+    try:
+        return sup.ensure_model_ready(model_id, timeout_s=int(wait_s))
+    except Exception as exc:
+        logger.warning("model %s failed readiness check: %s", model_id, exc)
+        return False
+
+
 def load_local_model(model_path: str) -> Optional[dict]:
     """Prepare a local .gguf for use as the CLI's model.
 
@@ -67,7 +121,9 @@ def load_local_model(model_path: str) -> Optional[dict]:
       2. Ensure the PM-pinned llama.cpp engine is installed (downloads it when missing).
       3. Sideload the GGUF into the managed models directory.
       4. Start (or adopt) the supervised llama-server.
-      5. Return the resolved runtime; the first model on disk becomes the target.
+      5. Refresh the router so it sees the staged model.
+      6. Wait for the model to appear, load it, and run a touch generation to
+         prove it is responsive before returning routing.
 
     The returned runtime's ``base_url``/``api_key`` point at the managed server.
     Call :func:`shutdown_local_model` when done so the server stops with the CLI.
@@ -128,33 +184,95 @@ def load_local_model(model_path: str) -> Optional[dict]:
             logger.warning("could not start local llama-server: %s", exc)
             return None
 
-        if sup is None:
-            # Another process may already be serving; resolve the endpoint.
+        if sup is not None:
+            base_url = sup.base_url.rsplit("/v1", 1)[0]
+            api_key = sup.api_key
+            owns_server = True
+        else:
+            # Another process may already be serving; resolve its endpoint.
             from hermes_cli.local_runtime.endpoint import resolve_llamacpp_endpoint
 
             endpoint = resolve_llamacpp_endpoint(config=config, wait_for_boot_s=10.0)
             if endpoint is None:
-                logger.warning("local llama-server is not running and could not be started")
+                logger.warning(
+                    "local llama-server is not running and could not be started"
+                )
                 return None
             base_url = endpoint["base_url"].rsplit("/v1", 1)[0]
             api_key = endpoint.get("api_key", "") or "no-key-required"
-        else:
-            base_url = sup.base_url.rsplit("/v1", 1)[0]
-            api_key = sup.api_key
+            owns_server = False
+            sup = None  # we don't own the supervisor; can't drive /models/load directly
 
-        # Ensure the server knows about the staged model (router scans at spawn;
-        # a sideloaded file added while running needs a bounce).
+        # ── 4. Refresh the router so it sees the newly sideloaded model ──
+        # The router only scans the models directory at spawn/refresh; a file
+        # added while running is invisible until a bounce.
         try:
             bootstrap.refresh_local_runtime()
         except Exception:
             logger.debug("runtime refresh after sideload skipped", exc_info=True)
+
+        # When we own the server, re-resolve the supervisor after refresh (it may
+        # have bounced and restarted).
+        if owns_server:
+            sup = bootstrap.get_supervisor()
+            if sup is None:
+                logger.warning("llama-server supervisor disappeared after refresh")
+                return None
+
+        # ── 5. Wait for the model to appear in the router's model list ──
+        if owns_server:
+            appeared = _wait_for_model(sup, model_id, _MODEL_APPEAR_WAIT_S)
+        else:
+            # Foreign server: poll its HTTP /models endpoint instead.
+            appeared = False
+            deadline = time.monotonic() + _MODEL_APPEAR_WAIT_S
+            while time.monotonic() < deadline:
+                try:
+                    statuses = _server_models(base_url, api_key)
+                except Exception:
+                    statuses = {}
+                if model_id in statuses:
+                    appeared = True
+                    logger.info(
+                        "model %s appeared in foreign router (status=%s)",
+                        model_id,
+                        statuses.get(model_id),
+                    )
+                    break
+                time.sleep(1)
+        if not appeared:
+            logger.warning(
+                "model %s did not appear in the llama-server model list after %.0fs; "
+                "staged file: %s",
+                model_id,
+                _MODEL_APPEAR_WAIT_S,
+                dest.name,
+            )
+            return None
+
+        # ── 6. Load the model and prove readiness with a touch generation ──
+        if owns_server:
+            ready = _ensure_model_ready(sup, model_id, _MODEL_READY_WAIT_S)
+        else:
+            # Foreign server: the model autoloads on first request; just confirm
+            # it shows as loadable/ready in the list.
+            try:
+                statuses = _server_models(base_url, api_key, timeout_s=10)
+                ready = statuses.get(model_id) in ("loaded", "ready", "sleeping")
+            except Exception:
+                ready = False
+        if not ready:
+            logger.warning(
+                "model %s failed to become ready in the llama-server", model_id
+            )
+            return None
 
         _ACTIVE_MODEL_ID = model_id
         _ACTIVE_BASE_URL = base_url
         _ACTIVE_API_KEY = api_key
 
         logger.info(
-            "local model loaded: %s (%s) -> %s (engine b%s %s)",
+            "local model loaded and ready: %s (%s) -> %s (engine b%s %s)",
             model_id, dest.name, base_url, engine.tag, engine.backend,
         )
         return {
