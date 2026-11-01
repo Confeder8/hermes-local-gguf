@@ -1,0 +1,102 @@
+# ===== Leftover from repo migration (huge; skip) =====
+.git.remove-me/
+
+# ===== Hermes runtime data / cache (machine-specific; created on first run) =====
+.cache/
+data/
+
+# ===== Python / tooling caches (generated) =====
+__pycache__/
+*.pyc
+.ruff_cache/
+.pytest_cache/
+.venv/
+.hermes/
+*.egg-info/
+.eggs/
+
+# ===== Large binary distribution archives (not git-friendly; distribute via GitHub Releases) =====
+*.rar
+*.zip
+
+# ===== Repo-migration leftovers / temp (not part of the project) =====
+.git.remove-me.parked/
+*.rartemp
+*.bak
+
+# ===== Windows / OS system (never commit) =====
+$RECYCLE.BIN/
+System Volume Information/
+.DS_Store
+Thumbs.db
+
+# ===== Hermes runtime state (created on first run; machine-specific) =====
+.hermes/
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.db.*
+logs/
+profiles/
+auth.json
+config.yaml
+.hermes-update.lock
+.hermes-update-zip-swap.lock
+.update-incomplete
+.update-incomplete.lock
+.active_profile
+.hermes_history
+.sessions/
+.gateway.lock
+.gateway.pid
+.gateway_state.json
+.processes.json
+
+# ===== Python =====
+__pycache__/
+*.pyc
+*.pyc.*
+*.pyo
+*.pyd
+.venv/
+venv/
+.env
+.env.local
+*.egg-info/
+.eggs/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ===== Node =====
+node_modules/
+
+# ===== Hermes caches (regenerated) =====
+.cache/
+.pip-cache/
+.uv-cache/
+.web_ui_build.lock
+
+# ===== IDE / editors =====
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ===== Hermes update / release temp =====
+*.tar.gz
+*.tgz
+.release_notes.md
+mini-swe-agent/
+
+# ===== Build output =====
+hermes_cli/web_dist/
+hermes_cli/tui_dist/*
+apps/desktop/build/
+apps/desktop/dist/
+apps/desktop/dist-webapp/
+apps/desktop/release/
+apps/desktop/.staging-*/
+*.tsbuildinfo
