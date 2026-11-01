@@ -1,4 +1,4 @@
-# <p align="center">🛸 Hermes Agent — Portable & Cross-Platform</p>
+# <p align="center">🛸 Hermes Agent — Portable & Cross-Platform with local GGUF Support</p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Hermes_Agent-Portable-8A2BE2?style=for-the-badge&logo=ai" alt="Hermes Agent Portable">
