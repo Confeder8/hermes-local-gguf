@@ -218,7 +218,15 @@ class CLIInitMixin:
                 self._explicit_base_url = None
                 self._model_is_default = False
                 return
-            # Fall through: local model failed, continue with normal resolution.
+            # Local model was explicitly requested but failed to load. Do not
+            # silently fall through to cloud routing — that confuses the user.
+            print(
+                f"\n[bold red][local-model] failed to load '{local_model}'.[/]\n"
+                "  See the messages above for the error. The llama.cpp engine may still be "
+                "downloading, or the local server may not have started. "
+                "Try again in a moment, or run without --local-model.\n"
+            )
+            return
         # LLM_MODEL/OPENAI_MODEL env vars are deliberately NOT checked (multi-agent setups
         # would stomp each other through the environment).
         _model_config = CLI_CONFIG["model"]
