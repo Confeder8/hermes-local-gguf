@@ -249,6 +249,11 @@ REM ---------------------------------------------------------------------------
 echo.
 if not defined GATEWAY_PID goto :start_gateway_and_chat
 python "%PORTABLE_ROOT%\scripts\gateway_control.py" session
+if errorlevel 1 (
+    echo.
+    echo %RED%Chat session exited with an error.%RESET%
+    pause
+)
 goto :detect_status
 
 :menu_setup
@@ -269,6 +274,12 @@ goto :start_gateway_and_chat
 :start_gateway_and_chat
 echo.
 python "%PORTABLE_ROOT%\scripts\gateway_control.py" session
+if errorlevel 1 (
+    echo.
+    echo %RED%Failed to start gateway or chat. Use Advanced > View Logs to diagnose.%RESET%
+    pause
+    goto :detect_status
+)
 echo.
 pause
 goto :detect_status

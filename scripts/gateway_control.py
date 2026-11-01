@@ -34,6 +34,22 @@ PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 FILETIME_TO_UNIX_CENTISECONDS = 116_444_736_000_000_000
 GET_PROCESS_TIMES_DIVISOR = 100_000
 
+# Windows creationflags for a detached, windowless background child.
+# Mirrors hermes_cli._subprocess_compat.windows_detach_flags():
+# CREATE_NEW_PROCESS_GROUP (Ctrl+C isolation), CREATE_NO_WINDOW (no visible console),
+# CREATE_BREAKAWAY_FROM_JOB (survives parent job teardown). DETACHED_PROCESS is
+# deliberately excluded: it overrides CREATE_NO_WINDOW and leaves console-subsystem
+# descendants to allocate their own flashing windows (#54220 / #56747).
+if os.name == "nt":
+    _CREATE_NEW_PROCESS_GROUP = 0x00000200
+    _CREATE_NO_WINDOW = 0x08000000
+    _CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+    _BACKGROUND_FLAGS = (
+        _CREATE_NEW_PROCESS_GROUP | _CREATE_NO_WINDOW | _CREATE_BREAKAWAY_FROM_JOB
+    )
+else:
+    _BACKGROUND_FLAGS = 0
+
 
 def _open_process(pid: int, access: int) -> int | None:
     kernel32 = ctypes.windll.kernel32
@@ -213,13 +229,6 @@ def cmd_wait(timeout: float) -> int:
 
 def spawn_gateway() -> subprocess.Popen:
     STDIO_LOG.parent.mkdir(parents=True, exist_ok=True)
-    flags = 0
-    if os.name == "nt":
-        flags = (
-            subprocess.DETACHED_PROCESS
-            | subprocess.CREATE_NEW_PROCESS_GROUP
-            | subprocess.CREATE_NO_WINDOW
-        )
     with open(STDIO_LOG, "ab") as log:
         return subprocess.Popen(
             [sys.executable, "-c", "from hermes_cli.main import main; main()", "gateway"],
@@ -228,7 +237,7 @@ def spawn_gateway() -> subprocess.Popen:
             stdin=subprocess.DEVNULL,
             stdout=log,
             stderr=subprocess.STDOUT,
-            creationflags=flags,
+            creationflags=_BACKGROUND_FLAGS,
             close_fds=True,
         )
 
@@ -324,13 +333,6 @@ def cmd_chat(extra: list[str]) -> int:
 
 
 def spawn_guardian(run_pid: int, gateway_pid: int) -> None:
-    flags = 0
-    if os.name == "nt":
-        flags = (
-            subprocess.DETACHED_PROCESS
-            | subprocess.CREATE_NEW_PROCESS_GROUP
-            | subprocess.CREATE_NO_WINDOW
-        )
     subprocess.Popen(
         [
             sys.executable,
@@ -344,7 +346,7 @@ def spawn_guardian(run_pid: int, gateway_pid: int) -> None:
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        creationflags=flags,
+        creationflags=_BACKGROUND_FLAGS,
         close_fds=True,
     )
 
@@ -358,13 +360,6 @@ def cmd_guard(run_pid: int, gateway_pid: int) -> int:
 
 
 def spawn_session_guardian(run_pid: int) -> None:
-    flags = 0
-    if os.name == "nt":
-        flags = (
-            subprocess.DETACHED_PROCESS
-            | subprocess.CREATE_NEW_PROCESS_GROUP
-            | subprocess.CREATE_NO_WINDOW
-        )
     subprocess.Popen(
         [
             sys.executable,
@@ -377,7 +372,7 @@ def spawn_session_guardian(run_pid: int) -> None:
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        creationflags=flags,
+        creationflags=_BACKGROUND_FLAGS,
         close_fds=True,
     )
 
@@ -411,6 +406,13 @@ def cmd_guard_session(run_pid: int) -> int:
 def cmd_session(extra: list[str]) -> int:
     started_here = read_pid() is None
     if started_here:
+        # Clear any stale stop marker left by a previous planned stop so it
+        # does not interfere with this fresh gateway start.
+        try:
+            STOP_MARKER.unlink(missing_ok=True)
+        except OSError:
+            pass
+        cleanup_stale()
         spawn_session_guardian(os.getpid())
         print("Starting gateway ...", flush=True)
         spawn_gateway()
@@ -426,6 +428,7 @@ def cmd_session(extra: list[str]) -> int:
             return 1
         print(f"Gateway is ready (PID {ready_pid}).", flush=True)
     print("Opening Hermes Chat ...", flush=True)
+    code = 0
     try:
         # A dedicated console keeps the launcher menu visible and gives the
         # interactive CLI a real TTY (the menu console must never be replaced).
@@ -438,15 +441,18 @@ def cmd_session(extra: list[str]) -> int:
         )
     except KeyboardInterrupt:
         code = 130
-    # Always stop the gateway when the chat session ends so the user returns
-    # to the launcher menu with no orphaned background console. The guardian
-    # (spawned above when we started the gateway) is the backup stop path.
-    pid = read_pid()
-    if pid is not None:
-        print("Chat closed - stopping gateway ...", flush=True)
-        stop_pid(pid, 35.0)
-        cleanup_stale()
-        print("Gateway stopped.", flush=True)
+    finally:
+        # Only stop the gateway if this call started it. A gateway that was
+        # already running belongs to the user and must stay up after chat exits
+        # (picking "Start Hermes Chat" must not kill a live gateway). The
+        # guardian spawned above is the backup stop path for gateway we own.
+        if started_here:
+            pid = read_pid()
+            if pid is not None:
+                print("Chat closed - stopping gateway ...", flush=True)
+                stop_pid(pid, 35.0)
+                cleanup_stale()
+                print("Gateway stopped.", flush=True)
     return code
 
 

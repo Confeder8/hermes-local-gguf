@@ -288,7 +288,11 @@ show_menu() {
 
 menu_chat() {
     clear
-    "$VIRTUAL_ENV/bin/python" "$PORTABLE_ROOT/scripts/gateway_control.py" session || true
+    if ! "$VIRTUAL_ENV/bin/python" "$PORTABLE_ROOT/scripts/gateway_control.py" session; then
+        echo ""
+        echo -e "${RED}Chat session exited with an error.${RESET}"
+        read -p "Press Enter to continue ..."
+    fi
     detect_status
     show_menu
 }
@@ -308,7 +312,11 @@ menu_gateway() {
         read -p "Press Enter to continue ..."
     else
         echo ""
-        "$VIRTUAL_ENV/bin/python" "$PORTABLE_ROOT/scripts/gateway_control.py" session || true
+        if ! "$VIRTUAL_ENV/bin/python" "$PORTABLE_ROOT/scripts/gateway_control.py" session; then
+            echo ""
+            echo -e "${RED}Failed to start gateway or chat. Use Advanced > View Logs to diagnose.${RESET}"
+            read -p "Press Enter to continue ..."
+        fi
     fi
     detect_status
     show_menu
@@ -382,7 +390,11 @@ adv_config() {
 
 adv_restart() {
     "$VIRTUAL_ENV/bin/python" "$PORTABLE_ROOT/scripts/gateway_control.py" stop >/dev/null 2>&1 || true
-    "$VIRTUAL_ENV/bin/python" "$PORTABLE_ROOT/scripts/gateway_control.py" session || true
+    if ! "$VIRTUAL_ENV/bin/python" "$PORTABLE_ROOT/scripts/gateway_control.py" session; then
+        echo ""
+        echo -e "${RED}Failed to restart gateway or chat. Use Advanced > View Logs to diagnose.${RESET}"
+        read -p "Press Enter to continue ..."
+    fi
     detect_status
     show_menu
 }
